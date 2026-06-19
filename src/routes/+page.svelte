@@ -112,6 +112,8 @@
 	let sgfItems = $state<SgfLibraryItem[]>([]);
 	let loadedGame = $state<LoadedSgfGame | null>(null);
 	let loadedGameTurn = $state(0);
+	let sgfSearchTimer: ReturnType<typeof setTimeout> | null = null;
+	let sgfSearchRequestId = 0;
 	let runtimeSettings = $state<PublicSettings>({ ...defaultSettings });
 	let settingsForm = $state({
 		llmProvider: defaultSettings.llmProvider as 'ollama' | 'openai',
@@ -337,6 +339,12 @@
 	}
 
 	async function searchSgfLibrary() {
+		if (sgfSearchTimer) {
+			clearTimeout(sgfSearchTimer);
+			sgfSearchTimer = null;
+		}
+
+		const requestId = ++sgfSearchRequestId;
 		sgfLoading = true;
 		sgfStatus = '';
 
@@ -355,15 +363,40 @@
 			const payload = (await response.json()) as {
 				games: { items: SgfLibraryItem[]; truncated: boolean; visited: number };
 			};
+
+			if (requestId !== sgfSearchRequestId) return;
+
 			sgfItems = payload.games.items;
 			sgfStatus = payload.games.truncated
 				? `Showing ${payload.games.items.length} matches from the first ${payload.games.visited.toLocaleString()} files scanned.`
 				: `Showing ${payload.games.items.length} matches.`;
 		} catch (error) {
+			if (requestId !== sgfSearchRequestId) return;
 			sgfStatus = error instanceof Error ? error.message : 'Could not search SGF library.';
 		} finally {
-			sgfLoading = false;
+			if (requestId === sgfSearchRequestId) {
+				sgfLoading = false;
+			}
 		}
+	}
+
+	function scheduleSgfSearch(event: Event) {
+		sgfSearch = (event.currentTarget as HTMLInputElement).value;
+
+		if (sgfSearchTimer) {
+			clearTimeout(sgfSearchTimer);
+		}
+
+		sgfSearchTimer = setTimeout(() => {
+			sgfSearchTimer = null;
+			void searchSgfLibrary();
+		}, 300);
+	}
+
+	function handleSgfSourceChange(event: Event) {
+		sgfSource = (event.currentTarget as HTMLSelectElement).value as typeof sgfSource;
+		sgfItems = [];
+		void searchSgfLibrary();
 	}
 
 	async function openSgfGame(path: string) {
@@ -808,7 +841,7 @@
 					void searchSgfLibrary();
 				}}
 			>
-				<select aria-label="SGF source" bind:value={sgfSource}>
+				<select aria-label="SGF source" bind:value={sgfSource} onchange={handleSgfSourceChange}>
 					<option value="cwi">CWI</option>
 					<option value="jgdb">JGDB</option>
 					<option value="all">All</option>
@@ -818,6 +851,7 @@
 					type="search"
 					placeholder="Search file path..."
 					bind:value={sgfSearch}
+					oninput={scheduleSgfSearch}
 				/>
 				<button type="submit" class="icon-button" title="Search games" disabled={sgfLoading}>
 					{#if sgfLoading}

@@ -3,7 +3,7 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { z } from 'zod';
-import { colorName, formatScoreLead, formatWinrate } from '$lib/go/coordinates';
+import { colorName, formatScoreLead, formatWinrate, toGtpCoordinate } from '$lib/go/coordinates';
 import { goPositionSchema } from '$lib/go/schemas';
 import { getRuntimeSettings } from '$lib/server/runtime-settings';
 import type { AnalysisResult } from '$lib/go/types';
@@ -44,12 +44,19 @@ const chatRequestSchema = z.object({
 });
 
 const coachSystemPrompt = [
-	'You are a Go teacher explaining KataGo analysis.',
-	'KataGo analysis is the source of truth. Do not invent candidate moves, winrates, score leads, ownership, or weak groups that are not supported by the supplied analysis.',
-	'If the analysis source is fallback or missing, say that KataGo is not connected and limit yourself to explaining the visible move history and setup steps.',
-	'Keep answers concise, beginner-friendly, and concrete. Prefer coordinates and short variations from KataGo PVs.',
+	'You are a patient Go teacher for the board game Go, also called baduk or weiqi.',
+	'KataGo analysis is the source of truth. Use only supplied KataGo facts for candidate moves, winrates, score leads, ownership, weak groups, and variations.',
+	'Never use chess terms or chess concepts. Banned words include pawn, pawns, piece value, material balance, check, checkmate, rook, bishop, knight, queen, king, castle, fork, and pin.',
+	'Use Go vocabulary: shape, liberties, territory, influence, thickness, weak group, cutting point, extension, invasion, reduction, sente, gote, ko, endgame, corner, side, center, moyo, joseki, fuseki.',
+	'If the user asks whether the last move was good or bad, be precise: the supplied analysis is for the resulting current position, not a before-and-after comparison. Do not claim the last move caused a winrate or score change unless a comparison is supplied.',
+	'When KataGo candidate moves or PVs are supplied, do not give a vague answer about lacking information. Explain what the numbers and candidate continuations imply, using cautious language where needed.',
+	'If analysis is missing or fallback, say KataGo is not connected and avoid strategic claims.',
+	'Keep answers concise, beginner-friendly, and concrete. Prefer coordinates, shape/territory/influence language, and short variations from KataGo PVs.',
 	'Do not expose hidden reasoning. Give the useful teaching explanation directly.'
 ].join(' ');
+const bannedCoachTerms =
+	/\b(pawn|pawns|piece value|material balance|check|checkmate|rook|bishop|knight|queen|king|castle|fork|pin)\b/i;
+const gtpColumns = 'ABCDEFGHJKLMNOPQRSTUVWXYZ';
 
 export const POST: RequestHandler = async ({ request, cookies }) => {
 	const parsed = chatRequestSchema.safeParse(await request.json());
@@ -70,7 +77,7 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 			model: openai(settings.openaiModel || 'gpt-5.5'),
 			system: coachSystemPrompt,
 			messages: [
-				...history.map((entry) => ({
+				...historyForModel(history).map((entry) => ({
 					role: entry.role,
 					content: entry.content
 				})),
@@ -82,7 +89,23 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 			maxOutputTokens: 700
 		});
 
-		return json({ content: result.text, provider: 'openai' });
+		if (!containsBannedCoachTerm(result.text)) {
+			return json({ content: result.text, provider: 'openai' });
+		}
+
+		const retry = await generateText({
+			model: openai(settings.openaiModel || 'gpt-5.5'),
+			system: coachSystemPrompt,
+			messages: [
+				{
+					role: 'user',
+					content: `${coachPrompt}\n\nRewrite the answer using only Go vocabulary. Do not mention chess, pawns, material balance, or pieces.`
+				}
+			],
+			maxOutputTokens: 700
+		});
+
+		return json({ content: retry.text, provider: 'openai' });
 	}
 
 	try {
@@ -112,48 +135,66 @@ function buildCoachPrompt(
 	position: z.infer<typeof goPositionSchema>,
 	analysis: AnalysisResult | null
 ): string {
+	const rootWinrate = asNumber(analysis?.rootInfo.winrate);
+	const rootLead = asNumber(analysis?.rootInfo.scoreLead ?? analysis?.rootInfo.scoreMean);
+	const analysisPlayer =
+		typeof analysis?.rootInfo.currentPlayer === 'string'
+			? colorName(analysis.rootInfo.currentPlayer === 'W' ? 'W' : 'B')
+			: colorName(position.nextPlayer);
 	const topMoves = analysis?.moveInfos.slice(0, 8).map((move) => ({
 		move: move.move,
+		area: describeMoveArea(move.move, position.boardSize),
 		order: move.order,
 		visits: move.visits,
-		winrate: move.winrate,
-		scoreLead: move.scoreLead ?? move.scoreMean,
+		winrate: formatWinrate(move.winrate),
+		scoreLead: formatScoreLead(move.scoreLead ?? move.scoreMean),
 		pv: move.pv?.slice(0, 5)
 	}));
 	const recentMoves = position.moves.slice(-12).map((move) => ({
 		number: move.moveNumber,
-		color: move.color,
+		color: colorName(move.color),
 		move: move.gtp
 	}));
+	const boardStones = summarizeBoardStones(position);
+	const lastMove = position.lastMove
+		? `${position.lastMove.moveNumber}. ${colorName(position.lastMove.color)} ${position.lastMove.gtp} (${describeMoveArea(position.lastMove.gtp, position.boardSize)})`
+		: 'none';
 
-	return JSON.stringify(
-		{
-			userQuestion: message,
-			position: {
-				boardSize: position.boardSize,
-				komi: position.komi,
-				rules: position.rules,
-				nextPlayer: position.nextPlayer,
-				moveCount: position.moves.length,
-				lastMove: position.lastMove,
-				recentMoves
-			},
-			analysis: analysis
-				? {
-						source: analysis.source,
-						unavailableReason: analysis.unavailableReason,
-						rootInfo: {
-							visits: analysis.rootInfo.visits,
-							winrate: analysis.rootInfo.winrate,
-							scoreLead: analysis.rootInfo.scoreLead ?? analysis.rootInfo.scoreMean
-						},
-						topMoves
-					}
-				: null
-		},
-		null,
-		2
-	);
+	return [
+		`User question: ${message}`,
+		'',
+		'Answer requirements:',
+		'- Speak only about Go. Do not use chess analogies or chess vocabulary.',
+		'- Explain what the KataGo numbers suggest in plain language.',
+		'- If asked about the last move, say whether current analysis supports it, but do not pretend to know the before/after swing.',
+		'- Do not say you lack information if KataGo candidate moves and PVs are present. Give the best teaching explanation supported by the data.',
+		'- Structure the answer as: verdict, main Go purpose, candidate comparison, one short continuation or beginner takeaway.',
+		'- Use 2-4 short paragraphs or bullets. Include one concrete continuation if KataGo supplied a PV.',
+		'',
+		'Current position:',
+		`- Board: ${position.boardSize}x${position.boardSize}, ${position.rules}, komi ${position.komi}`,
+		`- Move count: ${position.moves.length}`,
+		`- Last move: ${lastMove}`,
+		`- To play now: ${colorName(position.nextPlayer)}`,
+		`- Recent moves: ${recentMoves.map((move) => `${move.number}. ${move.color} ${move.move}`).join(', ') || 'none'}`,
+		`- Current Black stones: ${boardStones.black || 'none'}`,
+		`- Current White stones: ${boardStones.white || 'none'}`,
+		'',
+		analysis
+			? [
+					'KataGo analysis:',
+					`- Source: ${analysis.source}`,
+					analysis.unavailableReason ? `- Unavailable reason: ${analysis.unavailableReason}` : undefined,
+					`- Analysis perspective: ${analysisPlayer} to play in the current position`,
+					`- Root visits: ${analysis.rootInfo.visits ?? 'n/a'}`,
+					`- Root winrate for analysis perspective: ${formatWinrate(rootWinrate)}`,
+					`- Root score lead for analysis perspective: ${formatScoreLead(rootLead)}`,
+					`- Top candidate moves: ${JSON.stringify(topMoves ?? [], null, 2)}`
+				]
+					.filter(Boolean)
+					.join('\n')
+			: 'KataGo analysis: none'
+	].join('\n');
 }
 
 function fallbackCoachReply(
@@ -198,6 +239,63 @@ function fallbackCoachReply(
 
 type ChatHistory = z.infer<typeof chatRequestSchema>['history'];
 
+function historyForModel(history: ChatHistory): ChatHistory {
+	return history.filter((entry) => entry.role === 'user').slice(-4);
+}
+
+function asNumber(value: unknown): number | undefined {
+	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function summarizeBoardStones(position: z.infer<typeof goPositionSchema>): { black: string; white: string } {
+	const black: string[] = [];
+	const white: string[] = [];
+
+	position.board.forEach((row, y) => {
+		row.forEach((point, x) => {
+			if (point === 1) {
+				black.push(toGtpCoordinate(x, y, position.boardSize));
+			} else if (point === 2) {
+				white.push(toGtpCoordinate(x, y, position.boardSize));
+			}
+		});
+	});
+
+	return {
+		black: black.join(', '),
+		white: white.join(', ')
+	};
+}
+
+function describeMoveArea(move: string, boardSize: number): string {
+	if (!move || move.toLowerCase() === 'pass') return 'pass';
+
+	const match = /^([A-Z])(\d+)$/i.exec(move);
+	if (!match) return 'unknown area';
+
+	const x = gtpColumns.indexOf(match[1].toUpperCase());
+	const row = Number(match[2]);
+
+	if (x < 0 || !Number.isFinite(row)) return 'unknown area';
+
+	const leftEdge = Math.floor(boardSize / 3);
+	const rightEdge = boardSize - leftEdge - 1;
+	const lowerRows = Math.floor(boardSize / 3);
+	const upperRows = boardSize - lowerRows + 1;
+
+	const horizontal = x <= leftEdge ? 'left' : x >= rightEdge ? 'right' : 'center';
+	const vertical = row <= lowerRows ? 'lower' : row >= upperRows ? 'upper' : 'middle';
+
+	if (horizontal === 'center' && vertical === 'middle') return 'center';
+	if (horizontal === 'center') return `${vertical} side`;
+	if (vertical === 'middle') return `${horizontal} side`;
+	return `${vertical} ${horizontal}`;
+}
+
+function containsBannedCoachTerm(value: string): boolean {
+	return bannedCoachTerms.test(value);
+}
+
 async function generateOllamaReply({
 	baseUrl,
 	model,
@@ -209,6 +307,42 @@ async function generateOllamaReply({
 	history: ChatHistory;
 	prompt: string;
 }): Promise<string> {
+	const messages = [
+		{ role: 'system', content: coachSystemPrompt },
+		...historyForModel(history).map((entry) => ({
+			role: entry.role,
+			content: entry.content
+		})),
+		{ role: 'user', content: prompt }
+	];
+	const content = await requestOllamaChat({ baseUrl, model, messages });
+
+	if (!containsBannedCoachTerm(content)) {
+		return content;
+	}
+
+	return requestOllamaChat({
+		baseUrl,
+		model,
+		messages: [
+			{ role: 'system', content: coachSystemPrompt },
+			{
+				role: 'user',
+				content: `${prompt}\n\nRewrite the answer using only Go vocabulary. Do not mention chess, pawns, material balance, or pieces.`
+			}
+		]
+	});
+}
+
+async function requestOllamaChat({
+	baseUrl,
+	model,
+	messages
+}: {
+	baseUrl: string;
+	model: string;
+	messages: Array<{ role: string; content: string }>;
+}): Promise<string> {
 	const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/chat`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
@@ -216,14 +350,7 @@ async function generateOllamaReply({
 			model,
 			stream: false,
 			think: model.startsWith('gpt-oss') ? 'low' : false,
-			messages: [
-				{ role: 'system', content: coachSystemPrompt },
-				...history.map((entry) => ({
-					role: entry.role,
-					content: entry.content
-				})),
-				{ role: 'user', content: prompt }
-			],
+			messages,
 			options: {
 				temperature: 0.2,
 				num_ctx: 8192,
