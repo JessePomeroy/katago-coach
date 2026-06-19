@@ -58,6 +58,13 @@
 		path: string;
 		name: string;
 		source: string;
+		title: string;
+		blackPlayer?: string;
+		whitePlayer?: string;
+		event?: string;
+		date?: string;
+		result?: string;
+		moveCount?: number;
 	};
 	type LoadedSgfGame = GameRecord & { path: string };
 	type EngineStatus = {
@@ -412,6 +419,17 @@
 		goToLoadedGameTurn(loadedGame.moves.length, loadedGame);
 	}
 
+	function gameListMeta(item: SgfLibraryItem) {
+		return [
+			item.event,
+			item.date,
+			item.result,
+			typeof item.moveCount === 'number' ? `${item.moveCount} moves` : undefined
+		]
+			.filter(Boolean)
+			.join(' · ');
+	}
+
 	function resetBoard() {
 		boardSize = defaultBoardSize;
 		komi = defaultKomi;
@@ -476,6 +494,41 @@
 				<p>{position.moves.length} moves · {colorName(position.nextPlayer)} to play · {rules} {komi}</p>
 			</div>
 			<div class="toolbar" aria-label="Board controls">
+				{#if loadedGame}
+					<div class="replay-toolbar" aria-label="Game replay controls">
+						<button type="button" class="icon-button" title="First move" onclick={() => goToLoadedGameTurn(0)}>
+							<ChevronsLeft size={16} />
+						</button>
+						<button
+							type="button"
+							class="icon-button"
+							title="Previous move"
+							onclick={() => goToLoadedGameTurn(loadedGameTurn - 1)}
+							disabled={loadedGameTurn <= 0}
+						>
+							<ChevronLeft size={16} />
+						</button>
+						<span>{loadedGameProgress}</span>
+						<button
+							type="button"
+							class="icon-button"
+							title="Next move"
+							onclick={() => goToLoadedGameTurn(loadedGameTurn + 1)}
+							disabled={loadedGameTurn >= loadedGame.moves.length}
+						>
+							<ChevronRight size={16} />
+						</button>
+						<button
+							type="button"
+							class="icon-button"
+							title="Last move"
+							onclick={goToLoadedGameEnd}
+							disabled={loadedGameTurn >= loadedGame.moves.length}
+						>
+							<ChevronsRight size={16} />
+						</button>
+					</div>
+				{/if}
 				<button type="button" class="icon-button" title="Settings" onclick={() => (settingsOpen = true)}>
 					<Settings size={18} />
 				</button>
@@ -789,47 +842,18 @@
 						{loadedGame.event ? `${loadedGame.event} · ` : ''}{loadedGame.date ?? 'Unknown date'} ·
 						{loadedGame.result ?? 'No result'}
 					</small>
-					<div class="replay-controls">
-						<button type="button" class="icon-button" title="First move" onclick={() => goToLoadedGameTurn(0)}>
-							<ChevronsLeft size={16} />
-						</button>
-						<button
-							type="button"
-							class="icon-button"
-							title="Previous move"
-							onclick={() => goToLoadedGameTurn(loadedGameTurn - 1)}
-							disabled={loadedGameTurn <= 0}
-						>
-							<ChevronLeft size={16} />
-						</button>
-						<span>{loadedGameProgress}</span>
-						<button
-							type="button"
-							class="icon-button"
-							title="Next move"
-							onclick={() => goToLoadedGameTurn(loadedGameTurn + 1)}
-							disabled={loadedGameTurn >= loadedGame.moves.length}
-						>
-							<ChevronRight size={16} />
-						</button>
-						<button
-							type="button"
-							class="icon-button"
-							title="Last move"
-							onclick={goToLoadedGameEnd}
-							disabled={loadedGameTurn >= loadedGame.moves.length}
-						>
-							<ChevronsRight size={16} />
-						</button>
-					</div>
 				</section>
 			{/if}
 
 			<div class="game-list">
 				{#each sgfItems as item}
 					<button type="button" onclick={() => openSgfGame(item.path)}>
-						<FolderOpen size={15} />
-						<span>{item.path}</span>
+						<FolderOpen size={16} />
+						<span>
+							<strong>{item.title}</strong>
+							<em>{item.blackPlayer ?? 'Black'} vs {item.whitePlayer ?? 'White'}</em>
+							<small>{gameListMeta(item) || item.path}</small>
+						</span>
 						<small>{item.source}</small>
 					</button>
 				{:else}
@@ -977,7 +1001,29 @@
 	}
 
 	.toolbar {
+		flex-wrap: wrap;
+		justify-content: flex-end;
 		gap: 8px;
+	}
+
+	.replay-toolbar {
+		display: grid;
+		grid-template-columns: 36px 36px minmax(68px, auto) 36px 36px;
+		gap: 6px;
+		align-items: center;
+		padding: 4px;
+		border: 1px solid #d7dce2;
+		border-radius: 8px;
+		background: #f8fafb;
+	}
+
+	.replay-toolbar span {
+		padding: 0 4px;
+		text-align: center;
+		color: #314254;
+		font-size: 0.82rem;
+		font-weight: 750;
+		white-space: nowrap;
 	}
 
 	button,
@@ -1287,21 +1333,6 @@
 		font-size: 0.78rem;
 	}
 
-	.replay-controls {
-		display: grid;
-		grid-template-columns: 36px 36px minmax(72px, 1fr) 36px 36px;
-		gap: 6px;
-		align-items: center;
-		margin-top: 6px;
-	}
-
-	.replay-controls > span {
-		text-align: center;
-		color: #314254;
-		font-size: 0.82rem;
-		font-weight: 700;
-	}
-
 	.game-list {
 		display: grid;
 		gap: 6px;
@@ -1312,11 +1343,11 @@
 
 	.game-list button {
 		display: grid;
-		grid-template-columns: 18px minmax(0, 1fr) auto;
+		grid-template-columns: 20px minmax(0, 1fr) auto;
 		gap: 8px;
-		align-items: center;
-		min-height: 34px;
-		padding: 7px 8px;
+		align-items: start;
+		min-height: 58px;
+		padding: 9px 10px;
 		border: 1px solid #e1e6eb;
 		border-radius: 8px;
 		background: #ffffff;
@@ -1329,13 +1360,33 @@
 	}
 
 	.game-list span {
+		display: grid;
+		gap: 3px;
+		min-width: 0;
+	}
+
+	.game-list strong,
+	.game-list em,
+	.game-list span small {
 		overflow: hidden;
 		white-space: nowrap;
 		text-overflow: ellipsis;
-		font-size: 0.8rem;
 	}
 
-	.game-list small {
+	.game-list strong {
+		color: #22313f;
+		font-size: 0.84rem;
+		line-height: 1.2;
+	}
+
+	.game-list em {
+		color: #526174;
+		font-size: 0.8rem;
+		font-style: normal;
+	}
+
+	.game-list small,
+	.game-list span small {
 		color: #667085;
 		font-size: 0.72rem;
 		font-weight: 700;

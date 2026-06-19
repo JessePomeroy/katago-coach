@@ -14,6 +14,20 @@ const sourceRoots = {
 	jgdb: path.join(libraryRoot, 'jgdb')
 } as const;
 
+type SgfLibraryItem = {
+	id: string;
+	path: string;
+	name: string;
+	source: string;
+	title: string;
+	blackPlayer?: string;
+	whitePlayer?: string;
+	event?: string;
+	date?: string;
+	result?: string;
+	moveCount?: number;
+};
+
 const querySchema = z.object({
 	q: z.string().trim().max(200).optional().default(''),
 	source: z.enum(['all', 'cwi', 'jgdb']).optional().default('all'),
@@ -56,7 +70,7 @@ async function listGames({
 }) {
 	const root = sourceRoots[source];
 	const normalizedQuery = q.toLowerCase();
-	const files: Array<{ id: string; path: string; name: string; source: string }> = [];
+	const files: SgfLibraryItem[] = [];
 	let visited = 0;
 
 	async function walk(directory: string): Promise<void> {
@@ -86,12 +100,7 @@ async function listGames({
 			const relativePath = toLibraryRelativePath(fullPath);
 			if (normalizedQuery && !relativePath.toLowerCase().includes(normalizedQuery)) continue;
 
-			files.push({
-				id: relativePath,
-				path: relativePath,
-				name: entry.name,
-				source: relativePath.startsWith('cwi/') ? 'CWI' : relativePath.startsWith('jgdb/') ? 'JGDB' : 'Local'
-			});
+			files.push(await summarizeGame(fullPath, relativePath, entry.name));
 		}
 	}
 
@@ -102,6 +111,37 @@ async function listGames({
 		truncated: visited >= maxVisitedFiles,
 		visited
 	};
+}
+
+async function summarizeGame(fullPath: string, relativePath: string, name: string): Promise<SgfLibraryItem> {
+	const source = relativePath.startsWith('cwi/') ? 'CWI' : relativePath.startsWith('jgdb/') ? 'JGDB' : 'Local';
+
+	try {
+		const contents = await readFile(fullPath, 'utf8');
+		const game = parseSgfGame(contents, relativePath);
+
+		return {
+			id: relativePath,
+			path: relativePath,
+			name,
+			source,
+			title: game.title,
+			blackPlayer: game.blackPlayer,
+			whitePlayer: game.whitePlayer,
+			event: game.event,
+			date: game.date,
+			result: game.result,
+			moveCount: game.moves.length
+		};
+	} catch {
+		return {
+			id: relativePath,
+			path: relativePath,
+			name,
+			source,
+			title: name
+		};
+	}
 }
 
 async function loadGame(relativePath: string) {
