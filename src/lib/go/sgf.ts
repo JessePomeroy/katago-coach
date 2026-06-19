@@ -5,7 +5,7 @@ const SGF_COLUMNS = 'abcdefghijklmnopqrstuvwxyz';
 
 type SgfProperties = Record<string, string[]>;
 
-export function parseSgfGame(input: string, id = crypto.randomUUID()): GameRecord {
+export function parseSgfGame(input: string, id: string = crypto.randomUUID()): GameRecord {
 	const sgf = input.trim();
 	if (!sgf) {
 		throw new Error('SGF is empty.');

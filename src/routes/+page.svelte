@@ -2,7 +2,13 @@
 	import { onMount } from 'svelte';
 	import {
 		Bot,
+		BookOpen,
+		ChevronLeft,
+		ChevronRight,
+		ChevronsLeft,
+		ChevronsRight,
 		Download,
+		FolderOpen,
 		KeyRound,
 		Power,
 		RefreshCw,
@@ -24,11 +30,11 @@
 		movesToSgf,
 		opponent
 	} from '$lib/go/coordinates';
-	import type { AnalysisResult, ChatMessage, GoMove, GoPosition } from '$lib/go/types';
+	import type { AnalysisResult, ChatMessage, GameRecord, GoMove, GoPosition } from '$lib/go/types';
 
-	const boardSize = 19;
-	const komi = 7.5;
-	const rules = 'Chinese';
+	const defaultBoardSize = 19;
+	const defaultKomi = 7.5;
+	const defaultRules = 'Chinese';
 	const defaultSettings = {
 		llmProvider: 'ollama' as const,
 		hasOpenAIKey: false,
@@ -47,6 +53,13 @@
 	];
 
 	type PublicSettings = typeof defaultSettings;
+	type SgfLibraryItem = {
+		id: string;
+		path: string;
+		name: string;
+		source: string;
+	};
+	type LoadedSgfGame = GameRecord & { path: string };
 	type EngineStatus = {
 		localOnly: boolean;
 		katago: {
@@ -62,7 +75,10 @@
 		};
 	};
 
-	let position = $state<GoPosition>(createEmptyPosition(boardSize, komi, rules));
+	let boardSize = $state(defaultBoardSize);
+	let komi = $state(defaultKomi);
+	let rules = $state(defaultRules);
+	let position = $state<GoPosition>(createEmptyPosition(defaultBoardSize, defaultKomi, defaultRules));
 	let analysis = $state<AnalysisResult | null>(null);
 	let messages = $state<ChatMessage[]>([
 		{
@@ -82,6 +98,13 @@
 	let engineBusy = $state(false);
 	let engineStatusText = $state('');
 	let engineStatus = $state<EngineStatus | null>(null);
+	let sgfSearch = $state('');
+	let sgfSource = $state<'all' | 'cwi' | 'jgdb'>('cwi');
+	let sgfLoading = $state(false);
+	let sgfStatus = $state('');
+	let sgfItems = $state<SgfLibraryItem[]>([]);
+	let loadedGame = $state<LoadedSgfGame | null>(null);
+	let loadedGameTurn = $state(0);
 	let runtimeSettings = $state<PublicSettings>({ ...defaultSettings });
 	let settingsForm = $state({
 		llmProvider: defaultSettings.llmProvider as 'ollama' | 'openai',
@@ -95,10 +118,14 @@
 	let rootWinrate = $derived(formatWinrate(analysis?.rootInfo.winrate));
 	let rootLead = $derived(formatScoreLead(analysis?.rootInfo.scoreLead ?? analysis?.rootInfo.scoreMean));
 	let topMoves = $derived(analysis?.moveInfos.slice(0, 6) ?? []);
+	let loadedGameProgress = $derived(
+		loadedGame ? `${loadedGameTurn} / ${loadedGame.moves.length}` : 'No game loaded'
+	);
 
 	onMount(() => {
 		void loadSettings();
 		void loadEngineStatus();
+		void searchSgfLibrary();
 	});
 
 	async function loadSettings() {
@@ -302,10 +329,98 @@
 		}
 	}
 
+	async function searchSgfLibrary() {
+		sgfLoading = true;
+		sgfStatus = '';
+
+		try {
+			const params = new URLSearchParams({
+				source: sgfSource,
+				q: sgfSearch,
+				limit: '80'
+			});
+			const response = await fetch(`/api/sgf-library?${params}`);
+
+			if (!response.ok) {
+				throw new Error(await response.text());
+			}
+
+			const payload = (await response.json()) as {
+				games: { items: SgfLibraryItem[]; truncated: boolean; visited: number };
+			};
+			sgfItems = payload.games.items;
+			sgfStatus = payload.games.truncated
+				? `Showing ${payload.games.items.length} matches from the first ${payload.games.visited.toLocaleString()} files scanned.`
+				: `Showing ${payload.games.items.length} matches.`;
+		} catch (error) {
+			sgfStatus = error instanceof Error ? error.message : 'Could not search SGF library.';
+		} finally {
+			sgfLoading = false;
+		}
+	}
+
+	async function openSgfGame(path: string) {
+		sgfLoading = true;
+		sgfStatus = '';
+
+		try {
+			const params = new URLSearchParams({ path });
+			const response = await fetch(`/api/sgf-library?${params}`);
+
+			if (!response.ok) {
+				throw new Error(await response.text());
+			}
+
+			const payload = (await response.json()) as { game: LoadedSgfGame };
+			loadedGame = payload.game;
+			goToLoadedGameTurn(0, payload.game);
+			sgfStatus = `Loaded ${payload.game.title}.`;
+		} catch (error) {
+			sgfStatus = error instanceof Error ? error.message : 'Could not open SGF game.';
+		} finally {
+			sgfLoading = false;
+		}
+	}
+
+	function goToLoadedGameTurn(turn: number, game = loadedGame) {
+		if (!game) return;
+
+		const nextTurn = Math.max(0, Math.min(turn, game.moves.length));
+		const moves = game.moves.slice(0, nextTurn).map((move, index) => ({
+			...move,
+			moveNumber: index + 1
+		}));
+
+		boardSize = game.boardSize;
+		komi = game.komi;
+		rules = game.rules;
+		loadedGameTurn = nextTurn;
+		position = {
+			...createEmptyPosition(game.boardSize, game.komi, game.rules),
+			moves,
+			nextPlayer: moves.at(-1) ? opponent(moves.at(-1)!.color) : 'B',
+			sgf: movesToSgf(moves, game.boardSize, game.komi, game.rules),
+			lastMove: moves.at(-1)
+		};
+		analysis = null;
+		status = '';
+		boardKey += 1;
+	}
+
+	function goToLoadedGameEnd() {
+		if (!loadedGame) return;
+		goToLoadedGameTurn(loadedGame.moves.length, loadedGame);
+	}
+
 	function resetBoard() {
+		boardSize = defaultBoardSize;
+		komi = defaultKomi;
+		rules = defaultRules;
 		position = createEmptyPosition(boardSize, komi, rules);
 		analysis = null;
 		status = '';
+		loadedGame = null;
+		loadedGameTurn = 0;
 		boardKey += 1;
 	}
 
@@ -327,6 +442,7 @@
 	}
 
 	function replaceMoves(moves: GoMove[]) {
+		loadedGameTurn = loadedGame ? Math.min(moves.length, loadedGame.moves.length) : 0;
 		position = {
 			...position,
 			moves,
@@ -623,6 +739,105 @@
 	</aside>
 
 	<section class="bottom-panel">
+		<div class="panel library-panel">
+			<div class="panel-heading">
+				<div>
+					<h2>Game Library</h2>
+					<p>{loadedGame ? loadedGameProgress : 'Browse local SGF files'}</p>
+				</div>
+				<BookOpen size={20} />
+			</div>
+
+			<form
+				class="library-search"
+				onsubmit={(event) => {
+					event.preventDefault();
+					void searchSgfLibrary();
+				}}
+			>
+				<select aria-label="SGF source" bind:value={sgfSource}>
+					<option value="cwi">CWI</option>
+					<option value="jgdb">JGDB</option>
+					<option value="all">All</option>
+				</select>
+				<input
+					aria-label="Search SGF files"
+					type="search"
+					placeholder="Search file path..."
+					bind:value={sgfSearch}
+				/>
+				<button type="submit" class="icon-button" title="Search games" disabled={sgfLoading}>
+					{#if sgfLoading}
+						<RefreshCw size={16} class="spin" />
+					{:else}
+						<Search size={16} />
+					{/if}
+				</button>
+			</form>
+
+			{#if sgfStatus}
+				<p class="status">{sgfStatus}</p>
+			{/if}
+
+			{#if loadedGame}
+				<section class="loaded-game" aria-label="Loaded SGF game">
+					<strong>{loadedGame.title}</strong>
+					<span>
+						{loadedGame.blackPlayer ?? 'Black'} vs {loadedGame.whitePlayer ?? 'White'}
+					</span>
+					<small>
+						{loadedGame.event ? `${loadedGame.event} · ` : ''}{loadedGame.date ?? 'Unknown date'} ·
+						{loadedGame.result ?? 'No result'}
+					</small>
+					<div class="replay-controls">
+						<button type="button" class="icon-button" title="First move" onclick={() => goToLoadedGameTurn(0)}>
+							<ChevronsLeft size={16} />
+						</button>
+						<button
+							type="button"
+							class="icon-button"
+							title="Previous move"
+							onclick={() => goToLoadedGameTurn(loadedGameTurn - 1)}
+							disabled={loadedGameTurn <= 0}
+						>
+							<ChevronLeft size={16} />
+						</button>
+						<span>{loadedGameProgress}</span>
+						<button
+							type="button"
+							class="icon-button"
+							title="Next move"
+							onclick={() => goToLoadedGameTurn(loadedGameTurn + 1)}
+							disabled={loadedGameTurn >= loadedGame.moves.length}
+						>
+							<ChevronRight size={16} />
+						</button>
+						<button
+							type="button"
+							class="icon-button"
+							title="Last move"
+							onclick={goToLoadedGameEnd}
+							disabled={loadedGameTurn >= loadedGame.moves.length}
+						>
+							<ChevronsRight size={16} />
+						</button>
+					</div>
+				</section>
+			{/if}
+
+			<div class="game-list">
+				{#each sgfItems as item}
+					<button type="button" onclick={() => openSgfGame(item.path)}>
+						<FolderOpen size={15} />
+						<span>{item.path}</span>
+						<small>{item.source}</small>
+					</button>
+				{:else}
+					<p class="empty">No SGF files found.</p>
+				{/each}
+			</div>
+		</div>
+
 		<div class="panel history-panel">
 			<h2>Moves</h2>
 			<div class="history-grid">
@@ -733,7 +948,7 @@
 	.bottom-panel {
 		grid-column: 1 / -1;
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(300px, 430px);
+		grid-template-columns: minmax(340px, 0.9fr) minmax(0, 1fr) minmax(300px, 430px);
 		gap: 16px;
 	}
 
@@ -748,6 +963,7 @@
 
 	.analysis-panel,
 	.chat-panel,
+	.library-panel,
 	.history-panel,
 	.sgf-panel {
 		display: flex;
@@ -1033,6 +1249,96 @@
 		overflow: hidden;
 		white-space: nowrap;
 		text-overflow: ellipsis;
+	}
+
+	.library-search {
+		display: grid;
+		grid-template-columns: 88px minmax(0, 1fr) 36px;
+		gap: 8px;
+		align-items: center;
+	}
+
+	.library-search input,
+	.library-search select {
+		width: 100%;
+		min-width: 0;
+	}
+
+	.loaded-game {
+		display: grid;
+		gap: 4px;
+		padding: 10px;
+		border: 1px solid #d7dce2;
+		border-radius: 8px;
+		background: #f8fafb;
+	}
+
+	.loaded-game strong,
+	.loaded-game span,
+	.loaded-game small {
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+	}
+
+	.loaded-game span,
+	.loaded-game small {
+		color: #667085;
+		font-size: 0.78rem;
+	}
+
+	.replay-controls {
+		display: grid;
+		grid-template-columns: 36px 36px minmax(72px, 1fr) 36px 36px;
+		gap: 6px;
+		align-items: center;
+		margin-top: 6px;
+	}
+
+	.replay-controls > span {
+		text-align: center;
+		color: #314254;
+		font-size: 0.82rem;
+		font-weight: 700;
+	}
+
+	.game-list {
+		display: grid;
+		gap: 6px;
+		overflow: auto;
+		max-height: 260px;
+		padding-right: 2px;
+	}
+
+	.game-list button {
+		display: grid;
+		grid-template-columns: 18px minmax(0, 1fr) auto;
+		gap: 8px;
+		align-items: center;
+		min-height: 34px;
+		padding: 7px 8px;
+		border: 1px solid #e1e6eb;
+		border-radius: 8px;
+		background: #ffffff;
+		color: #24313f;
+		text-align: left;
+	}
+
+	.game-list button:hover {
+		background: #eef3f6;
+	}
+
+	.game-list span {
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+		font-size: 0.8rem;
+	}
+
+	.game-list small {
+		color: #667085;
+		font-size: 0.72rem;
+		font-weight: 700;
 	}
 
 	.messages {
