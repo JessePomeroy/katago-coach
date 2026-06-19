@@ -39,6 +39,32 @@ npm run dev
 
 KataGo's analysis engine accepts one JSON query per line over stdin and returns JSON results over stdout. The bridge keeps that process alive and exposes `POST /analyze` for SvelteKit.
 
+The bridge loads local `.env` values automatically, so this command is enough once `KATAGO_CONFIG` and `KATAGO_MODEL` are set:
+
+```sh
+npm run katago:service
+```
+
+With Homebrew's KataGo package, usable local defaults look like:
+
+```sh
+KATAGO_BIN=/usr/local/bin/katago
+KATAGO_CONFIG=/usr/local/Cellar/katago/1.16.4/share/katago/configs/analysis_example.cfg
+KATAGO_MODEL=/usr/local/Cellar/katago/1.16.4/share/katago/g170e-b20c256x2-s5303129600-d1228401921.bin.gz
+KATAGO_ANALYSIS_URL=http://localhost:8719/analyze
+```
+
+## Local SGF libraries
+
+Downloaded SGF archives and extracted games live under `data/sgf`, which is intentionally ignored by git.
+
+Current local sources:
+
+- CWI/A.E. Brouwer public-domain database: `data/sgf/cwi`
+- Joe's Go Database public-domain dataset: `data/sgf/jgdb`
+
+These are local data files for indexing/import work. They are not committed to the GitHub repository.
+
 ## Chat layer
 
 Open the Settings button in the app to enter:

@@ -1,6 +1,9 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { existsSync, readFileSync } from 'node:fs';
+
+loadEnvFile('.env');
 
 const port = Number(process.env.KATAGO_SERVICE_PORT || 8719);
 const katagoBin = process.env.KATAGO_BIN || 'katago';
@@ -11,6 +14,25 @@ const extraArgs = process.env.KATAGO_EXTRA_ARGS?.split(' ').filter(Boolean) ?? [
 if (!config || !model) {
 	console.error('KATAGO_CONFIG and KATAGO_MODEL are required.');
 	process.exit(1);
+}
+
+function loadEnvFile(path) {
+	if (!existsSync(path)) return;
+
+	for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith('#')) continue;
+
+		const separator = trimmed.indexOf('=');
+		if (separator === -1) continue;
+
+		const key = trimmed.slice(0, separator).trim();
+		const value = trimmed.slice(separator + 1).trim().replace(/^['"]|['"]$/g, '');
+
+		if (key && process.env[key] === undefined) {
+			process.env[key] = value;
+		}
+	}
 }
 
 const args = ['analysis', '-config', config, '-model', model, ...extraArgs];
