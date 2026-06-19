@@ -1,0 +1,111 @@
+import { env } from '$env/dynamic/private';
+import type { Cookies } from '@sveltejs/kit';
+
+const settingsCookie = 'kgc_settings_session';
+const oneWeek = 60 * 60 * 24 * 7;
+
+export interface RuntimeSettingsInput {
+	openaiApiKey?: string;
+	openaiModel?: string;
+	katagoAnalysisUrl?: string;
+}
+
+export interface RuntimeSettings {
+	openaiApiKey?: string;
+	openaiModel: string;
+	katagoAnalysisUrl?: string;
+	hasRuntimeSettings: boolean;
+}
+
+export interface PublicRuntimeSettings {
+	hasOpenAIKey: boolean;
+	openaiModel: string;
+	katagoAnalysisUrl: string;
+	hasRuntimeSettings: boolean;
+}
+
+const sessionSettings = new Map<string, RuntimeSettingsInput>();
+
+export function getRuntimeSettings(cookies: Cookies): RuntimeSettings {
+	const sessionId = cookies.get(settingsCookie);
+	const stored = sessionId ? sessionSettings.get(sessionId) : undefined;
+
+	return {
+		openaiApiKey: stored?.openaiApiKey || env.OPENAI_API_KEY || undefined,
+		openaiModel: stored?.openaiModel || env.OPENAI_MODEL || 'gpt-5.5',
+		katagoAnalysisUrl: stored?.katagoAnalysisUrl || env.KATAGO_ANALYSIS_URL || undefined,
+		hasRuntimeSettings: Boolean(stored)
+	};
+}
+
+export function getPublicRuntimeSettings(cookies: Cookies): PublicRuntimeSettings {
+	const settings = getRuntimeSettings(cookies);
+
+	return {
+		hasOpenAIKey: Boolean(settings.openaiApiKey),
+		openaiModel: settings.openaiModel,
+		katagoAnalysisUrl: settings.katagoAnalysisUrl || '',
+		hasRuntimeSettings: settings.hasRuntimeSettings
+	};
+}
+
+export function saveRuntimeSettings(cookies: Cookies, input: RuntimeSettingsInput): RuntimeSettings {
+	const sessionId = getOrCreateSessionId(cookies);
+	const current = sessionSettings.get(sessionId) ?? {};
+	const next: RuntimeSettingsInput = {
+		...current
+	};
+
+	if (input.openaiApiKey !== undefined) {
+		const trimmed = input.openaiApiKey.trim();
+		if (trimmed) {
+			next.openaiApiKey = trimmed;
+		}
+	}
+
+	if (input.openaiModel !== undefined) {
+		const trimmed = input.openaiModel.trim();
+		if (trimmed) {
+			next.openaiModel = trimmed;
+		}
+	}
+
+	if (input.katagoAnalysisUrl !== undefined) {
+		const trimmed = input.katagoAnalysisUrl.trim();
+		if (trimmed) {
+			next.katagoAnalysisUrl = trimmed;
+		}
+	}
+
+	sessionSettings.set(sessionId, next);
+	return getRuntimeSettings(cookies);
+}
+
+export function clearRuntimeSettings(cookies: Cookies): RuntimeSettings {
+	const sessionId = cookies.get(settingsCookie);
+
+	if (sessionId) {
+		sessionSettings.delete(sessionId);
+	}
+
+	cookies.delete(settingsCookie, { path: '/' });
+	return getRuntimeSettings(cookies);
+}
+
+function getOrCreateSessionId(cookies: Cookies): string {
+	const existing = cookies.get(settingsCookie);
+
+	if (existing) {
+		return existing;
+	}
+
+	const sessionId = crypto.randomUUID();
+	cookies.set(settingsCookie, sessionId, {
+		path: '/',
+		httpOnly: true,
+		sameSite: 'lax',
+		maxAge: oneWeek
+	});
+
+	return sessionId;
+}
