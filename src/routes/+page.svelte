@@ -1,6 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Bot, KeyRound, RefreshCw, RotateCcw, Save, Search, Send, Settings, Trash2, Undo2, X } from '@lucide/svelte';
+	import {
+		Bot,
+		Download,
+		KeyRound,
+		Power,
+		RefreshCw,
+		RotateCcw,
+		Save,
+		Search,
+		Send,
+		Settings,
+		Trash2,
+		Undo2,
+		X
+	} from '@lucide/svelte';
 	import GoBoard from '$lib/components/GoBoard.svelte';
 	import {
 		colorName,
@@ -23,6 +37,19 @@
 	};
 
 	type PublicSettings = typeof defaultSettings;
+	type EngineStatus = {
+		localOnly: boolean;
+		katago: {
+			running: boolean;
+			url: string;
+		};
+		ollama: {
+			running: boolean;
+			modelInstalled: boolean;
+			model: string;
+			url: string;
+		};
+	};
 
 	let position = $state<GoPosition>(createEmptyPosition(boardSize, komi, rules));
 	let analysis = $state<AnalysisResult | null>(null);
@@ -41,6 +68,9 @@
 	let settingsOpen = $state(false);
 	let settingsSaving = $state(false);
 	let settingsStatus = $state('');
+	let engineBusy = $state(false);
+	let engineStatusText = $state('');
+	let engineStatus = $state<EngineStatus | null>(null);
 	let runtimeSettings = $state<PublicSettings>({ ...defaultSettings });
 	let settingsForm = $state({
 		openaiApiKey: '',
@@ -54,6 +84,7 @@
 
 	onMount(() => {
 		void loadSettings();
+		void loadEngineStatus();
 	});
 
 	async function loadSettings() {
@@ -129,6 +160,48 @@
 			settingsStatus = error instanceof Error ? error.message : 'Could not clear settings.';
 		} finally {
 			settingsSaving = false;
+		}
+	}
+
+	async function loadEngineStatus() {
+		try {
+			const response = await fetch('/api/local-engines');
+
+			if (!response.ok) {
+				engineStatus = null;
+				return;
+			}
+
+			engineStatus = (await response.json()) as EngineStatus;
+		} catch {
+			engineStatus = null;
+		}
+	}
+
+	async function runEngineAction(
+		action: 'start-all' | 'start-katago' | 'start-ollama' | 'pull-ollama-model'
+	) {
+		engineBusy = true;
+		engineStatusText = '';
+
+		try {
+			const response = await fetch('/api/local-engines', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ action })
+			});
+
+			if (!response.ok) {
+				throw new Error(await response.text());
+			}
+
+			const payload = (await response.json()) as { messages: string[]; status: EngineStatus };
+			engineStatus = payload.status;
+			engineStatusText = payload.messages.join(' ');
+		} catch (error) {
+			engineStatusText = error instanceof Error ? error.message : 'Engine command failed.';
+		} finally {
+			engineBusy = false;
 		}
 	}
 
@@ -284,13 +357,70 @@
 				<section class="settings-modal" aria-label="API settings">
 					<div class="panel-heading">
 						<div>
-							<h2>API Settings</h2>
+							<h2>Settings</h2>
 							<p>Configure this browser session without editing `.env`.</p>
 						</div>
 						<button type="button" class="icon-button" title="Close settings" onclick={() => (settingsOpen = false)}>
 							<X size={18} />
 						</button>
 					</div>
+
+					<section class="engine-controls" aria-label="Local engine controls">
+						<div>
+							<h3>Local Engines</h3>
+							<p>Development-only controls for this MacBook.</p>
+						</div>
+
+						<div class="engine-status-grid">
+							<div>
+								<span>KataGo</span>
+								<strong class:ready={engineStatus?.katago.running}>
+									{engineStatus?.katago.running ? 'Running' : 'Stopped'}
+								</strong>
+							</div>
+							<div>
+								<span>Ollama</span>
+								<strong class:ready={engineStatus?.ollama.running}>
+									{engineStatus?.ollama.running ? 'Running' : 'Stopped'}
+								</strong>
+							</div>
+							<div>
+								<span>{engineStatus?.ollama.model ?? 'gpt-oss:20b'}</span>
+								<strong class:ready={engineStatus?.ollama.modelInstalled}>
+									{engineStatus?.ollama.modelInstalled ? 'Installed' : 'Missing'}
+								</strong>
+							</div>
+						</div>
+
+						{#if engineStatusText}
+							<p class="status">{engineStatusText}</p>
+						{/if}
+
+						<div class="engine-actions">
+							<button type="button" class="primary-button" onclick={() => runEngineAction('start-all')} disabled={engineBusy}>
+								<Power size={16} />
+								Start Engines
+							</button>
+							<button type="button" class="text-button" onclick={() => runEngineAction('start-katago')} disabled={engineBusy}>
+								KataGo
+							</button>
+							<button type="button" class="text-button" onclick={() => runEngineAction('start-ollama')} disabled={engineBusy}>
+								Ollama
+							</button>
+							<button type="button" class="icon-button" title="Refresh engine status" onclick={loadEngineStatus} disabled={engineBusy}>
+								<RefreshCw size={16} class={engineBusy ? 'spin' : ''} />
+							</button>
+							<button
+								type="button"
+								class="icon-button"
+								title="Pull gpt-oss:20b"
+								onclick={() => runEngineAction('pull-ollama-model')}
+								disabled={engineBusy || engineStatus?.ollama.modelInstalled}
+							>
+								<Download size={16} />
+							</button>
+						</div>
+					</section>
 
 					<form
 						class="settings-form"
@@ -500,6 +630,7 @@
 	}
 
 	h1,
+	h3,
 	h2,
 	p {
 		margin: 0;
@@ -512,6 +643,11 @@
 
 	h2 {
 		font-size: 0.92rem;
+		font-weight: 720;
+	}
+
+	h3 {
+		font-size: 0.84rem;
 		font-weight: 720;
 	}
 
@@ -664,6 +800,58 @@
 	.settings-form {
 		display: grid;
 		gap: 14px;
+	}
+
+	.engine-controls {
+		display: grid;
+		gap: 12px;
+		padding: 12px;
+		border: 1px solid #d7dce2;
+		border-radius: 8px;
+		background: #f8fafb;
+	}
+
+	.engine-status-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 8px;
+	}
+
+	.engine-status-grid > div {
+		min-width: 0;
+		padding: 9px;
+		border: 1px solid #dfe6ec;
+		border-radius: 8px;
+		background: #ffffff;
+	}
+
+	.engine-status-grid span,
+	.engine-status-grid strong {
+		display: block;
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+	}
+
+	.engine-status-grid span {
+		color: #667085;
+		font-size: 0.76rem;
+	}
+
+	.engine-status-grid strong {
+		margin-top: 3px;
+		color: #8a3d1f;
+		font-size: 0.86rem;
+	}
+
+	.engine-status-grid strong.ready {
+		color: #28614f;
+	}
+
+	.engine-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
 	}
 
 	.settings-field {
@@ -906,8 +1094,13 @@
 			justify-content: stretch;
 		}
 
-		.settings-actions button {
+		.settings-actions button,
+		.engine-actions button {
 			flex: 1;
+		}
+
+		.engine-status-grid {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>

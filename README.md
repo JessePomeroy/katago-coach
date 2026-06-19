@@ -65,6 +65,18 @@ Current local sources:
 
 These are local data files for indexing/import work. They are not committed to the GitHub repository.
 
+## Local engine controls
+
+In development, the Settings modal includes local engine controls:
+
+- Start Engines
+- Start KataGo
+- Start Ollama
+- Pull `gpt-oss:20b`
+- Refresh engine status
+
+These buttons call `/api/local-engines`, which only accepts a small allowlist of local actions and is disabled outside SvelteKit development mode. This is intended for your personal MacBook/iPhone-over-LAN setup, not for a public deployment.
+
 ## Chat layer
 
 Open the Settings button in the app to enter:
