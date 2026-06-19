@@ -580,6 +580,13 @@
 						{message.content}
 					</div>
 				{/each}
+				{#if chatting}
+					<div class="message typing-message" aria-label="Coach is thinking">
+						<span></span>
+						<span></span>
+						<span></span>
+					</div>
+				{/if}
 			</div>
 
 			<form
@@ -1036,6 +1043,31 @@
 		background: #e9f7ef;
 	}
 
+	.typing-message {
+		display: inline-flex;
+		gap: 5px;
+		width: auto;
+		min-width: 54px;
+		align-items: center;
+		white-space: normal;
+	}
+
+	.typing-message span {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: #667085;
+		animation: typing-bounce 1.15s ease-in-out infinite;
+	}
+
+	.typing-message span:nth-child(2) {
+		animation-delay: 140ms;
+	}
+
+	.typing-message span:nth-child(3) {
+		animation-delay: 280ms;
+	}
+
 	.chat-form {
 		gap: 8px;
 		align-items: stretch;
@@ -1080,6 +1112,20 @@
 	@keyframes spin {
 		to {
 			transform: rotate(360deg);
+		}
+	}
+
+	@keyframes typing-bounce {
+		0%,
+		80%,
+		100% {
+			opacity: 0.45;
+			transform: translateY(0);
+		}
+
+		40% {
+			opacity: 1;
+			transform: translateY(-4px);
 		}
 	}
 
