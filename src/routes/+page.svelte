@@ -34,10 +34,17 @@
 		hasOpenAIKey: false,
 		openaiModel: 'gpt-5.5',
 		ollamaBaseUrl: 'http://127.0.0.1:11434',
-		ollamaModel: 'gpt-oss:20b',
+		ollamaModel: 'llama3.2:3b',
 		katagoAnalysisUrl: 'http://localhost:8719/analyze',
 		hasRuntimeSettings: false
 	};
+	const ollamaModelPresets = [
+		{ model: 'llama3.2:3b', label: 'Llama 3.2 3B', note: 'Fast default coach' },
+		{ model: 'gemma3:4b', label: 'Gemma 3 4B', note: 'Clear explanations' },
+		{ model: 'qwen3:4b', label: 'Qwen 3 4B', note: 'More reasoning' },
+		{ model: 'phi4-mini', label: 'Phi-4 Mini', note: 'Compact reasoning' },
+		{ model: 'gpt-oss:20b', label: 'GPT-OSS 20B', note: 'Slow, deeper' }
+	];
 
 	type PublicSettings = typeof defaultSettings;
 	type EngineStatus = {
@@ -50,6 +57,7 @@
 			running: boolean;
 			modelInstalled: boolean;
 			model: string;
+			installedModels: string[];
 			url: string;
 		};
 	};
@@ -191,7 +199,8 @@
 	}
 
 	async function runEngineAction(
-		action: 'start-all' | 'start-katago' | 'start-ollama' | 'pull-ollama-model'
+		action: 'start-all' | 'start-katago' | 'start-ollama' | 'pull-ollama-model',
+		model?: string
 	) {
 		engineBusy = true;
 		engineStatusText = '';
@@ -200,7 +209,7 @@
 			const response = await fetch('/api/local-engines', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ action })
+				body: JSON.stringify({ action, model })
 			});
 
 			if (!response.ok) {
@@ -397,7 +406,7 @@
 								</strong>
 							</div>
 							<div>
-								<span>{engineStatus?.ollama.model ?? 'gpt-oss:20b'}</span>
+								<span>{engineStatus?.ollama.model ?? defaultSettings.ollamaModel}</span>
 								<strong class:ready={engineStatus?.ollama.modelInstalled}>
 									{engineStatus?.ollama.modelInstalled ? 'Installed' : 'Missing'}
 								</strong>
@@ -425,9 +434,9 @@
 							<button
 								type="button"
 								class="icon-button"
-								title="Pull gpt-oss:20b"
-								onclick={() => runEngineAction('pull-ollama-model')}
-								disabled={engineBusy || engineStatus?.ollama.modelInstalled}
+								title={`Pull ${settingsForm.ollamaModel}`}
+								onclick={() => runEngineAction('pull-ollama-model', settingsForm.ollamaModel)}
+								disabled={engineBusy || engineStatus?.ollama.installedModels.includes(settingsForm.ollamaModel)}
 							>
 								<Download size={16} />
 							</button>
@@ -457,7 +466,16 @@
 
 						<label class="settings-field" for="ollama-model">
 							<span>Ollama model</span>
-							<input id="ollama-model" type="text" bind:value={settingsForm.ollamaModel} />
+							<select id="ollama-model" bind:value={settingsForm.ollamaModel}>
+								{#each ollamaModelPresets as preset}
+									<option value={preset.model}>{preset.label} - {preset.note}</option>
+								{/each}
+							</select>
+							<small>
+								{engineStatus?.ollama.installedModels.includes(settingsForm.ollamaModel)
+									? 'Installed locally.'
+									: 'Not installed locally yet. Use the download button above.'}
+							</small>
 						</label>
 
 						<label class="settings-field" for="openai-key">

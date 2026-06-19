@@ -49,7 +49,7 @@ export function getRuntimeSettings(cookies: Cookies): RuntimeSettings {
 		openaiApiKey,
 		openaiModel: stored?.openaiModel || env.OPENAI_MODEL || 'gpt-5.5',
 		ollamaBaseUrl: stored?.ollamaBaseUrl || env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
-		ollamaModel: stored?.ollamaModel || env.OLLAMA_MODEL || 'gpt-oss:20b',
+		ollamaModel: stored?.ollamaModel || env.OLLAMA_MODEL || 'llama3.2:3b',
 		katagoAnalysisUrl: stored?.katagoAnalysisUrl || env.KATAGO_ANALYSIS_URL || undefined,
 		hasRuntimeSettings: Boolean(stored)
 	};

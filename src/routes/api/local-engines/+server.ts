@@ -5,13 +5,15 @@ import { z } from 'zod';
 
 const ollamaBaseUrl = 'http://127.0.0.1:11434';
 const katagoBaseUrl = 'http://127.0.0.1:8719';
-const ollamaModel = 'gpt-oss:20b';
+const defaultOllamaModel = 'llama3.2:3b';
+const supportedOllamaModels = ['llama3.2:3b', 'gemma3:4b', 'qwen3:4b', 'phi4-mini', 'gpt-oss:20b'] as const;
 
 let katagoStarting = false;
-let ollamaPulling = false;
+const ollamaPulling = new Set<string>();
 
 const actionSchema = z.object({
-	action: z.enum(['status', 'start-all', 'start-katago', 'start-ollama', 'pull-ollama-model'])
+	action: z.enum(['status', 'start-all', 'start-katago', 'start-ollama', 'pull-ollama-model']),
+	model: z.enum(supportedOllamaModels).optional()
 });
 
 export const GET: RequestHandler = async () => {
@@ -44,7 +46,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	if (parsed.data.action === 'pull-ollama-model' || parsed.data.action === 'start-all') {
-		messages.push(await ensureOllamaModel());
+		messages.push(await ensureOllamaModel(parsed.data.model ?? defaultOllamaModel));
 	}
 
 	return json({
@@ -88,23 +90,34 @@ async function checkOllama() {
 		});
 
 		if (!response.ok) {
-			return { running: false, modelInstalled: false, model: ollamaModel, url: ollamaBaseUrl };
+			return {
+				running: false,
+				modelInstalled: false,
+				model: defaultOllamaModel,
+				installedModels: [],
+				url: ollamaBaseUrl
+			};
 		}
 
 		const payload = (await response.json()) as { models?: Array<{ name?: string; model?: string }> };
 		const models = payload.models ?? [];
+		const installedModels = supportedOllamaModels.filter((candidate) =>
+			models.some((model) => model.name === candidate || model.model === candidate)
+		);
 
 		return {
 			running: true,
-			modelInstalled: models.some((model) => model.name === ollamaModel || model.model === ollamaModel),
-			model: ollamaModel,
+			modelInstalled: installedModels.includes(defaultOllamaModel),
+			model: defaultOllamaModel,
+			installedModels,
 			url: ollamaBaseUrl
 		};
 	} catch {
 		return {
 			running: false,
 			modelInstalled: false,
-			model: ollamaModel,
+			model: defaultOllamaModel,
+			installedModels: [],
 			url: ollamaBaseUrl
 		};
 	}
@@ -158,23 +171,23 @@ async function startOllama(): Promise<string> {
 	return ready ? 'Ollama started.' : 'Ollama start command ran, but health check is still pending.';
 }
 
-async function ensureOllamaModel(): Promise<string> {
+async function ensureOllamaModel(model: (typeof supportedOllamaModels)[number]): Promise<string> {
 	const status = await checkOllama();
 
 	if (!status.running) {
 		return 'Ollama is not running, so the model pull did not start.';
 	}
 
-	if (status.modelInstalled) {
-		return `${ollamaModel} is already installed.`;
+	if (status.installedModels.includes(model)) {
+		return `${model} is already installed.`;
 	}
 
-	if (ollamaPulling) {
-		return `${ollamaModel} pull is already running.`;
+	if (ollamaPulling.has(model)) {
+		return `${model} pull is already running.`;
 	}
 
-	ollamaPulling = true;
-	const child = spawn('ollama', ['pull', ollamaModel], {
+	ollamaPulling.add(model);
+	const child = spawn('ollama', ['pull', model], {
 		cwd: process.cwd(),
 		detached: true,
 		stdio: 'ignore',
@@ -182,10 +195,10 @@ async function ensureOllamaModel(): Promise<string> {
 	});
 	child.unref();
 	child.on('exit', () => {
-		ollamaPulling = false;
+		ollamaPulling.delete(model);
 	});
 
-	return `Started pulling ${ollamaModel}. This can take several minutes.`;
+	return `Started pulling ${model}. This can take several minutes.`;
 }
 
 function runCommand(command: string, args: string[], timeoutMs: number): Promise<void> {

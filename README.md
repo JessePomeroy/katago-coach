@@ -72,7 +72,7 @@ In development, the Settings modal includes local engine controls:
 - Start Engines
 - Start KataGo
 - Start Ollama
-- Pull `gpt-oss:20b`
+- Pull the selected Ollama model
 - Refresh engine status
 
 These buttons call `/api/local-engines`, which only accepts a small allowlist of local actions and is disabled outside SvelteKit development mode. This is intended for your personal MacBook/iPhone-over-LAN setup, not for a public deployment.
@@ -94,10 +94,18 @@ For personal local use, the app defaults to Ollama when no OpenAI key is configu
 ```sh
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=gpt-oss:20b
+OLLAMA_MODEL=llama3.2:3b
 ```
 
 `/api/chat` sends the latest position and KataGo JSON analysis to Ollama's local `/api/chat` endpoint. If Ollama is unavailable, it returns a local fallback that refuses to invent strategy and shows the provider error.
+
+The Settings panel includes these local model presets:
+
+- `llama3.2:3b`: fast default coach model
+- `gemma3:4b`: slightly larger explanation model
+- `qwen3:4b`: stronger reasoning, usually slower
+- `phi4-mini`: compact reasoning model
+- `gpt-oss:20b`: deeper but much slower on CPU-only local runs
 
 The app sends only server-side requests to OpenAI. Do not put your API key in Svelte components or browser code.
 
@@ -162,7 +170,7 @@ For local Ollama chat, use:
 ```sh
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=gpt-oss:20b
+OLLAMA_MODEL=llama3.2:3b
 ```
 
 4. Install KataGo and download a neural net model from the KataGo release/model links. Then point `.env` at your local files:
