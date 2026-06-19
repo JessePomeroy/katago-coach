@@ -37,12 +37,14 @@
 		komi = 7.5,
 		rules = 'Chinese',
 		moves = [],
+		disabled = false,
 		onPositionChange
 	}: {
 		boardSize?: number;
 		komi?: number;
 		rules?: string;
 		moves?: GoMove[];
+		disabled?: boolean;
 		onPositionChange: (position: GoPosition) => void;
 	} = $props();
 
@@ -207,7 +209,12 @@
 </script>
 
 <div class="board-shell">
-	<div bind:this={boardElement} class="goban-host" aria-label="Interactive Go board"></div>
+	<div
+		bind:this={boardElement}
+		class:disabled
+		class="goban-host"
+		aria-label="Interactive Go board"
+	></div>
 	{#if errorMessage}
 		<p class="board-error">{errorMessage}</p>
 	{/if}
@@ -230,6 +237,10 @@
 		width: 100%;
 		height: 100%;
 		min-height: 300px;
+	}
+
+	.goban-host.disabled {
+		pointer-events: none;
 	}
 
 	.board-error {

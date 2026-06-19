@@ -24,13 +24,23 @@
 	import GoBoard from '$lib/components/GoBoard.svelte';
 	import {
 		colorName,
+		createEmptyBoard,
 		createEmptyPosition,
 		formatScoreLead,
 		formatWinrate,
 		movesToSgf,
-		opponent
+		opponent,
+		toSgfCoordinate
 	} from '$lib/go/coordinates';
-	import type { AnalysisResult, ChatMessage, GameRecord, GoMove, GoPosition } from '$lib/go/types';
+	import type {
+		AnalysisResult,
+		BoardPoint,
+		ChatMessage,
+		GameRecord,
+		GoMove,
+		GoPosition,
+		StoneColor
+	} from '$lib/go/types';
 
 	const defaultBoardSize = 19;
 	const defaultKomi = 7.5;
@@ -51,6 +61,7 @@
 		{ model: 'phi4-mini', label: 'Phi-4 Mini', note: 'Compact reasoning' },
 		{ model: 'gpt-oss:20b', label: 'GPT-OSS 20B', note: 'Slow, deeper' }
 	];
+	const gtpColumns = 'ABCDEFGHJKLMNOPQRSTUVWXYZ';
 
 	type PublicSettings = typeof defaultSettings;
 	type SgfLibraryItem = {
@@ -97,6 +108,11 @@
 	let maxVisits = $state(300);
 	let analyzing = $state(false);
 	let chatting = $state(false);
+	let aiOpponentEnabled = $state(false);
+	let humanColor = $state<StoneColor>('B');
+	let aiAutoCoach = $state(true);
+	let aiBusy = $state(false);
+	let aiStatus = $state('');
 	let boardKey = $state(0);
 	let status = $state('');
 	let settingsOpen = $state(false);
@@ -130,6 +146,7 @@
 	let loadedGameProgress = $derived(
 		loadedGame ? `${loadedGameTurn} / ${loadedGame.moves.length}` : 'No game loaded'
 	);
+	let aiColor = $derived(opponent(humanColor));
 
 	onMount(() => {
 		void loadSettings();
@@ -268,7 +285,32 @@
 		if (nextPosition.moves.length !== previousMoveCount) {
 			analysis = null;
 			status = '';
+			if (aiOpponentEnabled && nextPosition.nextPlayer === aiColor && !aiBusy) {
+				setTimeout(() => {
+					void playKataGoMove(nextPosition);
+				}, 0);
+			}
 		}
+	}
+
+	async function requestAnalysis(targetPosition: GoPosition, visits = maxVisits) {
+		const response = await fetch('/api/analyze', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ position: targetPosition, maxVisits: visits })
+		});
+
+		if (!response.ok) {
+			throw new Error(await response.text());
+		}
+
+		return (await response.json()) as AnalysisResult;
+	}
+
+	function analysisStatusFor(targetPosition: GoPosition, result: AnalysisResult) {
+		return result.source === 'katago'
+			? `Analyzed ${targetPosition.moves.length} moves with ${result.rootInfo.visits ?? 0} visits.`
+			: `KataGo unavailable: ${result.unavailableReason}`;
 	}
 
 	async function runAnalysis() {
@@ -276,21 +318,9 @@
 		status = '';
 
 		try {
-			const response = await fetch('/api/analyze', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ position, maxVisits })
-			});
-
-			if (!response.ok) {
-				throw new Error(await response.text());
-			}
-
-			analysis = (await response.json()) as AnalysisResult;
-			status =
-				analysis.source === 'katago'
-					? `Analyzed ${position.moves.length} moves with ${analysis.rootInfo.visits ?? 0} visits.`
-					: `KataGo unavailable: ${analysis.unavailableReason}`;
+			const result = await requestAnalysis(position);
+			analysis = result;
+			status = analysisStatusFor(position, result);
 		} catch (error) {
 			status = error instanceof Error ? error.message : 'Analysis failed.';
 		} finally {
@@ -298,13 +328,102 @@
 		}
 	}
 
+	async function toggleAiOpponent() {
+		aiOpponentEnabled = !aiOpponentEnabled;
+		aiStatus = aiOpponentEnabled
+			? `KataGo will play ${colorName(aiColor)}.`
+			: 'KataGo opponent stopped.';
+
+		if (aiOpponentEnabled && position.nextPlayer === aiColor && !aiBusy) {
+			await playKataGoMove(position);
+		}
+	}
+
+	async function playKataGoMove(sourcePosition = position) {
+		if (aiBusy) return;
+		if (sourcePosition.nextPlayer !== aiColor) return;
+
+		aiBusy = true;
+		aiStatus = 'KataGo is choosing a move...';
+
+		try {
+			const preMoveAnalysis = await requestAnalysis(sourcePosition);
+
+			if (preMoveAnalysis.source !== 'katago') {
+				analysis = preMoveAnalysis;
+				status = analysisStatusFor(sourcePosition, preMoveAnalysis);
+				aiStatus = `KataGo unavailable: ${preMoveAnalysis.unavailableReason}`;
+				return;
+			}
+
+			const candidate = preMoveAnalysis.moveInfos.find((move) => move.move);
+
+			if (!candidate) {
+				analysis = preMoveAnalysis;
+				status = 'KataGo did not return a playable move.';
+				aiStatus = status;
+				return;
+			}
+
+			const aiMove = moveFromGtp(
+				candidate.move,
+				sourcePosition.nextPlayer,
+				sourcePosition.moves.length + 1,
+				sourcePosition.boardSize
+			);
+			const nextPosition = buildPositionFromMoves(
+				[...sourcePosition.moves, aiMove],
+				sourcePosition.boardSize,
+				sourcePosition.komi,
+				sourcePosition.rules
+			);
+
+			position = nextPosition;
+			loadedGame = null;
+			loadedGameTurn = 0;
+			boardSize = nextPosition.boardSize;
+			komi = nextPosition.komi;
+			rules = nextPosition.rules;
+			boardKey += 1;
+			analysis = null;
+			status = `KataGo played ${candidate.move}.`;
+			aiStatus = `KataGo played ${candidate.move}.`;
+
+			if (aiAutoCoach) {
+				await requestCoachReply(
+					`KataGo chose ${candidate.move} as its reply. Explain why this move is useful, what it aims at, and what I should learn from it.`,
+					sourcePosition,
+					preMoveAnalysis
+				);
+			}
+
+			const postMoveAnalysis = await requestAnalysis(nextPosition);
+			analysis = postMoveAnalysis;
+			status =
+				postMoveAnalysis.source === 'katago'
+					? `KataGo played ${candidate.move}. ${analysisStatusFor(nextPosition, postMoveAnalysis)}`
+					: analysisStatusFor(nextPosition, postMoveAnalysis);
+		} catch (error) {
+			aiStatus = error instanceof Error ? error.message : 'KataGo move failed.';
+		} finally {
+			aiBusy = false;
+		}
+	}
+
 	async function sendChat() {
 		const content = chatInput.trim();
 		if (!content || chatting) return;
+		chatInput = '';
+		await requestCoachReply(content, position, analysis);
+	}
 
+	async function requestCoachReply(
+		content: string,
+		targetPosition: GoPosition,
+		targetAnalysis: AnalysisResult | null
+	) {
 		const nextMessages: ChatMessage[] = [...messages, { role: 'user', content }];
 		messages = nextMessages;
-		chatInput = '';
 		chatting = true;
 
 		try {
@@ -313,8 +432,8 @@
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
 					message: content,
-					position,
-					analysis,
+					position: targetPosition,
+					analysis: targetAnalysis,
 					history: nextMessages.slice(-6)
 				})
 			});
@@ -435,15 +554,11 @@
 		komi = game.komi;
 		rules = game.rules;
 		loadedGameTurn = nextTurn;
-		position = {
-			...createEmptyPosition(game.boardSize, game.komi, game.rules),
-			moves,
-			nextPlayer: moves.at(-1) ? opponent(moves.at(-1)!.color) : 'B',
-			sgf: movesToSgf(moves, game.boardSize, game.komi, game.rules),
-			lastMove: moves.at(-1)
-		};
+		position = buildPositionFromMoves(moves, game.boardSize, game.komi, game.rules);
 		analysis = null;
 		status = '';
+		aiOpponentEnabled = false;
+		aiStatus = '';
 		boardKey += 1;
 	}
 
@@ -470,9 +585,16 @@
 		position = createEmptyPosition(boardSize, komi, rules);
 		analysis = null;
 		status = '';
+		aiStatus = '';
 		loadedGame = null;
 		loadedGameTurn = 0;
 		boardKey += 1;
+
+		if (aiOpponentEnabled && position.nextPlayer === aiColor && !aiBusy) {
+			setTimeout(() => {
+				void playKataGoMove(position);
+			}, 0);
+		}
 	}
 
 	function undoMove() {
@@ -489,25 +611,148 @@
 			gtp: 'pass',
 			sgf: ''
 		};
-		replaceMoves([...position.moves, move]);
+		const nextPosition = replaceMoves([...position.moves, move]);
+		if (aiOpponentEnabled && nextPosition.nextPlayer === aiColor && !aiBusy) {
+			setTimeout(() => {
+				void playKataGoMove(nextPosition);
+			}, 0);
+		}
 	}
 
 	function replaceMoves(moves: GoMove[]) {
 		loadedGameTurn = loadedGame ? Math.min(moves.length, loadedGame.moves.length) : 0;
-		position = {
-			...position,
-			moves,
-			nextPlayer: moves.at(-1) ? opponent(moves.at(-1)!.color) : 'B',
-			sgf: movesToSgf(moves, boardSize, komi, rules),
-			lastMove: moves.at(-1)
-		};
+		const nextPosition = buildPositionFromMoves(moves, boardSize, komi, rules);
+		position = nextPosition;
 		analysis = null;
 		status = '';
+		aiStatus = '';
 		boardKey += 1;
+		return nextPosition;
 	}
 
 	function stoneLabel(move: GoMove) {
 		return `${move.moveNumber}. ${move.color} ${move.gtp}`;
+	}
+
+	function moveFromGtp(gtp: string, color: StoneColor, moveNumber: number, size: number): GoMove {
+		if (gtp.toLowerCase() === 'pass') {
+			return {
+				color,
+				x: -1,
+				y: -1,
+				moveNumber,
+				gtp: 'pass',
+				sgf: ''
+			};
+		}
+
+		const match = /^([A-Z])(\d+)$/i.exec(gtp);
+		if (!match) {
+			throw new Error(`KataGo returned unsupported move "${gtp}".`);
+		}
+
+		const x = gtpColumns.indexOf(match[1].toUpperCase());
+		const y = size - Number(match[2]);
+
+		if (x < 0 || y < 0 || y >= size) {
+			throw new Error(`KataGo returned out-of-board move "${gtp}".`);
+		}
+
+		return {
+			color,
+			x,
+			y,
+			moveNumber,
+			gtp,
+			sgf: toSgfCoordinate(x, y)
+		};
+	}
+
+	function buildPositionFromMoves(
+		moves: GoMove[],
+		size = boardSize,
+		positionKomi = komi,
+		positionRules = rules
+	): GoPosition {
+		const board = createEmptyBoard(size).map((row) => [...row]) as BoardPoint[][];
+
+		for (const move of moves) {
+			applyMoveToBoard(board, move);
+		}
+
+		return {
+			boardSize: size,
+			komi: positionKomi,
+			rules: positionRules,
+			moves,
+			board,
+			nextPlayer: moves.at(-1) ? opponent(moves.at(-1)!.color) : 'B',
+			sgf: movesToSgf(moves, size, positionKomi, positionRules),
+			lastMove: moves.at(-1)
+		};
+	}
+
+	function applyMoveToBoard(board: BoardPoint[][], move: GoMove) {
+		if (move.x < 0 || move.y < 0) return;
+		if (!board[move.y]?.[move.x]) {
+			board[move.y][move.x] = move.color === 'B' ? 1 : 2;
+		}
+
+		const opponentValue = move.color === 'B' ? 2 : 1;
+		for (const [x, y] of neighbors(move.x, move.y, board.length)) {
+			if (board[y][x] === opponentValue) {
+				const group = collectGroup(board, x, y);
+				if (!group.hasLiberty) {
+					for (const stone of group.stones) {
+						board[stone.y][stone.x] = 0;
+					}
+				}
+			}
+		}
+
+		const ownGroup = collectGroup(board, move.x, move.y);
+		if (!ownGroup.hasLiberty) {
+			for (const stone of ownGroup.stones) {
+				board[stone.y][stone.x] = 0;
+			}
+		}
+	}
+
+	function collectGroup(board: BoardPoint[][], startX: number, startY: number) {
+		const color = board[startY]?.[startX];
+		const stones: Array<{ x: number; y: number }> = [];
+		const visited = new Set<string>();
+		const stack = [{ x: startX, y: startY }];
+		let hasLiberty = false;
+
+		while (stack.length) {
+			const point = stack.pop()!;
+			const key = `${point.x},${point.y}`;
+			if (visited.has(key)) continue;
+			visited.add(key);
+			stones.push(point);
+
+			for (const [x, y] of neighbors(point.x, point.y, board.length)) {
+				if (board[y][x] === 0) {
+					hasLiberty = true;
+				} else if (board[y][x] === color) {
+					stack.push({ x, y });
+				}
+			}
+		}
+
+		return { stones, hasLiberty };
+	}
+
+	function neighbors(x: number, y: number, size: number): Array<[number, number]> {
+		return [
+			[x - 1, y],
+			[x + 1, y],
+			[x, y - 1],
+			[x, y + 1]
+		].filter(
+			([nextX, nextY]) => nextX >= 0 && nextY >= 0 && nextX < size && nextY < size
+		) as Array<[number, number]>;
 	}
 </script>
 
@@ -728,6 +973,7 @@
 					{komi}
 					{rules}
 					moves={position.moves}
+					disabled={aiBusy}
 					onPositionChange={handlePositionChange}
 				/>
 			{/key}
@@ -755,6 +1001,30 @@
 				<label for="visits">Visits</label>
 				<input id="visits" type="number" min="1" max="5000" bind:value={maxVisits} />
 			</div>
+
+			<section class="ai-opponent" aria-label="KataGo opponent controls">
+				<div>
+					<strong>KataGo Opponent</strong>
+					<span>{aiOpponentEnabled ? `You play ${colorName(humanColor)}` : 'Off'}</span>
+				</div>
+				<div class="ai-controls">
+					<select aria-label="Your color" bind:value={humanColor} disabled={aiOpponentEnabled || aiBusy}>
+						<option value="B">You: Black</option>
+						<option value="W">You: White</option>
+					</select>
+					<label>
+						<input type="checkbox" bind:checked={aiAutoCoach} />
+						Coach
+					</label>
+					<button type="button" class="text-button" onclick={toggleAiOpponent} disabled={aiBusy}>
+						<Bot size={16} />
+						{aiOpponentEnabled ? 'Stop' : 'Play'}
+					</button>
+				</div>
+				{#if aiStatus}
+					<p class="status">{aiStatus}</p>
+				{/if}
+			</section>
 
 			{#if status}
 				<p class:warning={analysis?.source === 'fallback'} class="status">{status}</p>
@@ -1239,6 +1509,56 @@
 	.visit-row {
 		justify-content: space-between;
 		gap: 10px;
+	}
+
+	.ai-opponent {
+		display: grid;
+		gap: 10px;
+		padding: 10px;
+		border: 1px solid #d7dce2;
+		border-radius: 8px;
+		background: #f8fafb;
+	}
+
+	.ai-opponent > div:first-child {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+	}
+
+	.ai-opponent strong {
+		font-size: 0.88rem;
+	}
+
+	.ai-opponent span {
+		color: #667085;
+		font-size: 0.8rem;
+		font-weight: 650;
+	}
+
+	.ai-controls {
+		display: grid;
+		grid-template-columns: minmax(120px, 1fr) auto auto;
+		gap: 8px;
+		align-items: center;
+	}
+
+	.ai-controls select {
+		width: 100%;
+	}
+
+	.ai-controls label {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		white-space: nowrap;
+	}
+
+	.ai-controls input[type='checkbox'] {
+		width: 16px;
+		height: 16px;
+		padding: 0;
 	}
 
 	label {
