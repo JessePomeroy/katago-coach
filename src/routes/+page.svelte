@@ -30,8 +30,11 @@
 	const komi = 7.5;
 	const rules = 'Chinese';
 	const defaultSettings = {
+		llmProvider: 'ollama' as const,
 		hasOpenAIKey: false,
 		openaiModel: 'gpt-5.5',
+		ollamaBaseUrl: 'http://127.0.0.1:11434',
+		ollamaModel: 'gpt-oss:20b',
 		katagoAnalysisUrl: 'http://localhost:8719/analyze',
 		hasRuntimeSettings: false
 	};
@@ -73,8 +76,11 @@
 	let engineStatus = $state<EngineStatus | null>(null);
 	let runtimeSettings = $state<PublicSettings>({ ...defaultSettings });
 	let settingsForm = $state({
+		llmProvider: defaultSettings.llmProvider as 'ollama' | 'openai',
 		openaiApiKey: '',
 		openaiModel: defaultSettings.openaiModel,
+		ollamaBaseUrl: defaultSettings.ollamaBaseUrl,
+		ollamaModel: defaultSettings.ollamaModel,
 		katagoAnalysisUrl: defaultSettings.katagoAnalysisUrl
 	});
 
@@ -103,7 +109,10 @@
 
 	function applyPublicSettings(settings: PublicSettings) {
 		runtimeSettings = settings;
+		settingsForm.llmProvider = settings.llmProvider || defaultSettings.llmProvider;
 		settingsForm.openaiModel = settings.openaiModel || defaultSettings.openaiModel;
+		settingsForm.ollamaBaseUrl = settings.ollamaBaseUrl || defaultSettings.ollamaBaseUrl;
+		settingsForm.ollamaModel = settings.ollamaModel || defaultSettings.ollamaModel;
 		settingsForm.katagoAnalysisUrl =
 			settings.katagoAnalysisUrl || defaultSettings.katagoAnalysisUrl;
 		settingsForm.openaiApiKey = '';
@@ -118,8 +127,11 @@
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
+					llmProvider: settingsForm.llmProvider,
 					openaiApiKey: settingsForm.openaiApiKey,
 					openaiModel: settingsForm.openaiModel,
+					ollamaBaseUrl: settingsForm.ollamaBaseUrl,
+					ollamaModel: settingsForm.ollamaModel,
 					katagoAnalysisUrl: settingsForm.katagoAnalysisUrl
 				})
 			});
@@ -429,6 +441,25 @@
 							void saveSettings();
 						}}
 					>
+						<label class="settings-field" for="llm-provider">
+							<span>LLM provider</span>
+							<select id="llm-provider" bind:value={settingsForm.llmProvider}>
+								<option value="ollama">Ollama local</option>
+								<option value="openai">OpenAI API</option>
+							</select>
+							<small>Ollama keeps chat local on your MacBook; OpenAI uses API billing.</small>
+						</label>
+
+						<label class="settings-field" for="ollama-url">
+							<span>Ollama URL</span>
+							<input id="ollama-url" type="url" bind:value={settingsForm.ollamaBaseUrl} />
+						</label>
+
+						<label class="settings-field" for="ollama-model">
+							<span>Ollama model</span>
+							<input id="ollama-model" type="text" bind:value={settingsForm.ollamaModel} />
+						</label>
+
 						<label class="settings-field" for="openai-key">
 							<span><KeyRound size={16} /> OpenAI API key</span>
 							<input
@@ -710,6 +741,7 @@
 
 	button,
 	input,
+	select,
 	textarea {
 		font: inherit;
 	}
@@ -866,7 +898,8 @@
 		gap: 8px;
 	}
 
-	.settings-field input {
+	.settings-field input,
+	.settings-field select {
 		width: 100%;
 	}
 
@@ -894,6 +927,7 @@
 	}
 
 	input,
+	select,
 	textarea {
 		border: 1px solid #ccd5dd;
 		border-radius: 8px;
@@ -901,7 +935,8 @@
 		color: #1f2933;
 	}
 
-	input {
+	input,
+	select {
 		width: 110px;
 		padding: 7px 9px;
 	}

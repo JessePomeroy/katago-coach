@@ -5,21 +5,30 @@ const settingsCookie = 'kgc_settings_session';
 const oneWeek = 60 * 60 * 24 * 7;
 
 export interface RuntimeSettingsInput {
+	llmProvider?: 'ollama' | 'openai';
 	openaiApiKey?: string;
 	openaiModel?: string;
+	ollamaBaseUrl?: string;
+	ollamaModel?: string;
 	katagoAnalysisUrl?: string;
 }
 
 export interface RuntimeSettings {
+	llmProvider: 'ollama' | 'openai';
 	openaiApiKey?: string;
 	openaiModel: string;
+	ollamaBaseUrl: string;
+	ollamaModel: string;
 	katagoAnalysisUrl?: string;
 	hasRuntimeSettings: boolean;
 }
 
 export interface PublicRuntimeSettings {
+	llmProvider: 'ollama' | 'openai';
 	hasOpenAIKey: boolean;
 	openaiModel: string;
+	ollamaBaseUrl: string;
+	ollamaModel: string;
 	katagoAnalysisUrl: string;
 	hasRuntimeSettings: boolean;
 }
@@ -29,10 +38,18 @@ const sessionSettings = new Map<string, RuntimeSettingsInput>();
 export function getRuntimeSettings(cookies: Cookies): RuntimeSettings {
 	const sessionId = cookies.get(settingsCookie);
 	const stored = sessionId ? sessionSettings.get(sessionId) : undefined;
+	const openaiApiKey = stored?.openaiApiKey || env.OPENAI_API_KEY || undefined;
+	const llmProvider =
+		stored?.llmProvider ||
+		(env.LLM_PROVIDER === 'openai' || env.LLM_PROVIDER === 'ollama' ? env.LLM_PROVIDER : undefined) ||
+		(openaiApiKey ? 'openai' : 'ollama');
 
 	return {
-		openaiApiKey: stored?.openaiApiKey || env.OPENAI_API_KEY || undefined,
+		llmProvider,
+		openaiApiKey,
 		openaiModel: stored?.openaiModel || env.OPENAI_MODEL || 'gpt-5.5',
+		ollamaBaseUrl: stored?.ollamaBaseUrl || env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+		ollamaModel: stored?.ollamaModel || env.OLLAMA_MODEL || 'gpt-oss:20b',
 		katagoAnalysisUrl: stored?.katagoAnalysisUrl || env.KATAGO_ANALYSIS_URL || undefined,
 		hasRuntimeSettings: Boolean(stored)
 	};
@@ -42,8 +59,11 @@ export function getPublicRuntimeSettings(cookies: Cookies): PublicRuntimeSetting
 	const settings = getRuntimeSettings(cookies);
 
 	return {
+		llmProvider: settings.llmProvider,
 		hasOpenAIKey: Boolean(settings.openaiApiKey),
 		openaiModel: settings.openaiModel,
+		ollamaBaseUrl: settings.ollamaBaseUrl,
+		ollamaModel: settings.ollamaModel,
 		katagoAnalysisUrl: settings.katagoAnalysisUrl || '',
 		hasRuntimeSettings: settings.hasRuntimeSettings
 	};
@@ -56,6 +76,10 @@ export function saveRuntimeSettings(cookies: Cookies, input: RuntimeSettingsInpu
 		...current
 	};
 
+	if (input.llmProvider !== undefined) {
+		next.llmProvider = input.llmProvider;
+	}
+
 	if (input.openaiApiKey !== undefined) {
 		const trimmed = input.openaiApiKey.trim();
 		if (trimmed) {
@@ -67,6 +91,20 @@ export function saveRuntimeSettings(cookies: Cookies, input: RuntimeSettingsInpu
 		const trimmed = input.openaiModel.trim();
 		if (trimmed) {
 			next.openaiModel = trimmed;
+		}
+	}
+
+	if (input.ollamaBaseUrl !== undefined) {
+		const trimmed = input.ollamaBaseUrl.trim();
+		if (trimmed) {
+			next.ollamaBaseUrl = trimmed.replace(/\/+$/, '');
+		}
+	}
+
+	if (input.ollamaModel !== undefined) {
+		const trimmed = input.ollamaModel.trim();
+		if (trimmed) {
+			next.ollamaModel = trimmed;
 		}
 	}
 

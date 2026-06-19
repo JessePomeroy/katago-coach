@@ -81,11 +81,23 @@ These buttons call `/api/local-engines`, which only accepts a small allowlist of
 
 Open the Settings button in the app to enter:
 
+- LLM provider: Ollama local or OpenAI API
+- Ollama URL and model
 - OpenAI API key
 - OpenAI model
 - KataGo analysis URL
 
-Those values are stored server-side for the current browser session and are not echoed back to the browser. `.env` values are still supported as defaults/fallbacks. Without an OpenAI key, `/api/chat` returns a local fallback that refuses to invent strategy and asks for KataGo analysis.
+Those values are stored server-side for the current browser session and are not echoed back to the browser. `.env` values are still supported as defaults/fallbacks.
+
+For personal local use, the app defaults to Ollama when no OpenAI key is configured:
+
+```sh
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=gpt-oss:20b
+```
+
+`/api/chat` sends the latest position and KataGo JSON analysis to Ollama's local `/api/chat` endpoint. If Ollama is unavailable, it returns a local fallback that refuses to invent strategy and shows the provider error.
 
 The app sends only server-side requests to OpenAI. Do not put your API key in Svelte components or browser code.
 
@@ -118,6 +130,7 @@ For a Vercel deployment, put production secrets in Vercel Environment Variables:
 ```sh
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-5.5
+LLM_PROVIDER=openai
 KATAGO_ANALYSIS_URL=https://your-katago-service.example.com/analyze
 ```
 
@@ -142,6 +155,14 @@ cp .env.example .env
 ```sh
 OPENAI_API_KEY=your_api_key_here
 OPENAI_MODEL=gpt-5.5
+```
+
+For local Ollama chat, use:
+
+```sh
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=gpt-oss:20b
 ```
 
 4. Install KataGo and download a neural net model from the KataGo release/model links. Then point `.env` at your local files:
@@ -169,5 +190,5 @@ npm run dev
 
 ```txt
 browser position -> /api/analyze -> KataGo bridge -> KataGo JSON
-browser question + latest analysis -> /api/chat -> OpenAI model
+browser question + latest analysis -> /api/chat -> Ollama or OpenAI model
 ```

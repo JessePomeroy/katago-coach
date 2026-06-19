@@ -7,8 +7,16 @@ import {
 } from '$lib/server/runtime-settings';
 
 const settingsRequestSchema = z.object({
+	llmProvider: z.enum(['ollama', 'openai']).optional(),
 	openaiApiKey: z.string().max(300).optional(),
 	openaiModel: z.string().trim().max(120).optional(),
+	ollamaBaseUrl: z
+		.string()
+		.trim()
+		.max(500)
+		.refine((value) => !value || URL.canParse(value), 'Ollama URL must be a valid URL.')
+		.optional(),
+	ollamaModel: z.string().trim().max(120).optional(),
 	katagoAnalysisUrl: z
 		.string()
 		.trim()
